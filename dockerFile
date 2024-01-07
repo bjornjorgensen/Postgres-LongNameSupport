@@ -1,0 +1,100 @@
+FROM debian:bookworm-slim
+
+# Set the desired version of PostgreSQL
+ENV PG_MAJOR 16
+ENV PG_VERSION 16.1-1.pgdg120+1
+ENV PATH /usr/local/pgsql/bin:$PATH
+ENV PGDATA /var/lib/postgresql/data
+ENV LANG en_US.UTF-8
+ENV GOSU_VERSION 1.16
+
+# Install dependencies necessary for building PostgreSQL
+RUN buildDeps=' \
+        ca-certificates \
+        gcc \
+        libc6-dev \
+        libreadline-dev \
+        make \
+        wget \
+        locales \
+        gnupg \
+        ' \
+    && set -eux \
+    && apt-get update && apt-get install -y --no-install-recommends $buildDeps \
+    && echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen && locale-gen && update-locale LANG=en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add user and group for PostgreSQL
+RUN set -eux \
+    && groupadd -r postgres --gid=999 \
+    && useradd -r -g postgres --uid=999 --home-dir=/var/lib/postgresql --shell=/bin/bash postgres \
+    && mkdir -p /var/lib/postgresql && chown -R postgres:postgres /var/lib/postgresql
+
+# Add the PostgreSQL Global Development Group (PGDG) repository for PostgreSQL 16
+RUN set -eux; \
+	wget --no-check-certificate -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -; \
+	echo "deb http://apt.postgresql.org/pub/repos/apt/ bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list; \
+	echo "deb-src http://apt.postgresql.org/pub/repos/apt/ bookworm-pgdg main" >> /etc/apt/sources.list.d/pgdg.list
+
+# Build and install PostgreSQL from the source
+RUN set -ex; \
+	apt-get update; \
+	apt-get build-dep -y postgresql-$PG_MAJOR; \
+	apt-get source postgresql-$PG_MAJOR; \
+	cd postgresql-$PG_MAJOR*; \
+	sed -i 's/#define NAMEDATALEN 64/#define NAMEDATALEN 151/' src/include/pg_config_manual.h; \
+	./configure; \
+	make -j"$(nproc)"; \
+	make install; \
+	cd contrib; \
+	make -j"$(nproc)"; \
+	make install; \
+	cd /; \
+	rm -rf /var/lib/apt/lists/* /postgresql-$PG_MAJOR*; \
+	apt-get purge -y --auto-remove $buildDeps
+
+# Set up working directories and permissions for PostgreSQL
+RUN set -eux \
+    && mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgresql && chmod 2777 /var/run/postgresql \
+    && mkdir -p "$PGDATA" && chown -R postgres:postgres "$PGDATA" && chmod 2777 "$PGDATA"
+
+# Copy the entrypoint and initdb scripts
+COPY docker-entrypoint.sh /usr/local/bin/
+COPY docker-ensure-initdb.sh /usr/local/bin/
+
+# Make sure the scripts are executable
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-ensure-initdb.sh
+    
+# Create the Docker entrypoint initdb directory
+RUN mkdir -p /docker-entrypoint-initdb.d
+
+# Set the entrypoint script
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Adjust PostgreSQL configuration to allow connections from any IP address
+RUN set -eux \
+    && mkdir -p /usr/local/pgsql/share \
+    && cp /usr/local/pgsql/share/postgresql.conf.sample /usr/local/pgsql/share/postgresql.conf.sample.orig \
+    && grep -v '^#' /usr/local/pgsql/share/postgresql.conf.sample.orig | grep -v '^$' > /usr/local/pgsql/share/postgresql.conf.sample \
+    && echo "listen_addresses = '*'" >> /usr/local/pgsql/share/postgresql.conf.sample
+
+# Ensure gosu is installed for step-down from root
+RUN set -eux \
+    && savedAptMark="$(apt-mark showmanual)" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$(dpkg --print-architecture)" \
+    && wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/$GOSU_VERSION/gosu-$(dpkg --print-architecture).asc" \
+    && export GNUPGHOME="$(mktemp -d)" \
+    && gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
+    && gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
+    && gpgconf --kill all \
+    && rm -rf "$GNUPGHOME" /usr/local/bin/gosu.asc \
+    && chmod +x /usr/local/bin/gosu
+
+# Default stop signal for PostgreSQL
+STOPSIGNAL SIGINT
+
+EXPOSE 5432
+CMD ["postgres"]
