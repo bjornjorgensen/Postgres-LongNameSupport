@@ -2,7 +2,7 @@ FROM debian:bookworm-slim
 
 # Set the desired version of PostgreSQL
 ENV PG_MAJOR 16
-ENV PG_VERSION 16.1-1.pgdg120+1
+ENV PG_VERSION 16.2-1.pgdg120+2
 ENV PATH /usr/local/pgsql/bin:$PATH
 ENV PGDATA /var/lib/postgresql/data
 ENV LANG en_US.UTF-8
