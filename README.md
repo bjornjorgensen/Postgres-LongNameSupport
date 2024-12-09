@@ -2,6 +2,14 @@
 
 This repository contains the Dockerfile and associated scripts for building a custom PostgreSQL Docker image. The unique feature of this image is a modification to the PostgreSQL source code to support longer identifier lengths. This is achieved by increasing `NAMEDATALEN` from the default of 64 to 151.
 
+## Important Notes
+
+Be aware that this modification:
+
+1. Only works in the architecture-specific build path (where PostgreSQL is built from source)
+2. Will increase the storage requirements for system catalogs
+3. May affect compatibility with some tools that assume the standard NAMEDATALEN
+
 The Dockerfile includes procedures for fetching the PostgreSQL source, patching the `pg_config_manual.h` file, compiling the server with the new identifier length, and setting up the container environment.
 
 ## Prerequisites
